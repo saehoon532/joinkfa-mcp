@@ -97,8 +97,7 @@ async def test_authentication_requires_matching_display_identity():
         return httpx.Response(200, json=data)
     async with KfaClient(session(), httpx.MockTransport(identity_response)) as client:
         await client.authenticate("엄세훈")
-        with pytest.raises(LookupError, match="SELF_LOOKUP_ONLY"):
-            await client.authenticate("다른사람")
+        await client.authenticate("다른사람")
     async with KfaClient(session(), httpx.MockTransport(lambda r: httpx.Response(200, json={"session": None}))) as client:
         with pytest.raises(LookupError, match="AUTH_REQUIRED_OR_IDENTITY_UNVERIFIED"):
             await client.authenticate("엄세훈")
@@ -121,8 +120,8 @@ class FakeClient:
     def __init__(self):
         self.details = []
 
-    async def authenticate(self, name):
-        assert name == "엄세훈"
+    async def authenticate(self, name=None):
+        pass
 
     async def json(self, path, params):
         if path == CATALOG:
@@ -199,7 +198,7 @@ def test_invalid_year(year):
 async def test_expiry_during_empty_scan_never_becomes_zero():
     class Expired(FakeClient):
         calls = 0
-        async def authenticate(self, name):
+        async def authenticate(self, name=None):
             self.calls += 1
             if self.calls > 1:
                 raise LookupError("AUTH_REQUIRED_OR_IDENTITY_UNVERIFIED")
@@ -216,3 +215,29 @@ async def test_json_error_with_empty_list_is_not_success():
         json={"errorCode": -1, "matchList": [], "totalCount": 0}))) as client:
         with pytest.raises(LookupError, match="UPSTREAM_REJECTED"):
             await client.json(CATALOG, {})
+
+
+@pytest.mark.asyncio
+async def test_other_referee_with_month_and_account_identity():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        if request.url.path == MENU:
+            return httpx.Response(200, json={"session": {"USER_ID": "test-user", "USER_NAME": "엄세훈"}})
+        if request.url.path == SCHEDULE:
+            assert json.loads(request.content)["v_YEAR_MONTH"] == "2026-10"
+            return httpx.Response(200, json={"singleList": [{"IDX": "game"}]})
+        assert b'test-user' in request.content
+        return httpx.Response(200, content=detail(REFEREE_MAIN="김영민", MATCH_CHECK_TIME="2026-10-01"))
+    async with KfaClient(session(), httpx.MockTransport(handler)) as client:
+        job = Job("김영민", 2026, ["league"], month=10)
+        result = await job.advance(client, 20)
+    assert result["complete"] and result["count"] == 1
+    assert job.matches[0]["roles"] == ["주심"]
+    assert len(requests) == 4
+
+
+@pytest.mark.parametrize("month", [0, 13, True, "10"])
+def test_invalid_month(month):
+    with pytest.raises(LookupError, match="INVALID_MONTH"):
+        Job("김영민", 2026, month=month)

@@ -183,9 +183,8 @@ class KfaClient:
         except httpx.HTTPError:
             raise LookupError("UPSTREAM_CONNECTION_ERROR") from None
 
-    async def authenticate(self, requested_name: str):
-        if name_key(requested_name) != name_key(self.session.name):
-            raise LookupError("SELF_LOOKUP_ONLY")
+    async def authenticate(self, requested_name: str | None = None):
+        # Verify the provisioned account, independently of the referee being searched.
         data = await self.json(MENU, {"SYS_CD": "CETUS"})
         identity = data.get("session")
         if (not isinstance(identity, dict)
@@ -221,6 +220,7 @@ class Job:
     name: str
     year: int
     competition_ids: list[str] | None = None
+    month: int | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     created: float = field(default_factory=time.time)
     queue: deque = field(default_factory=deque)
@@ -233,6 +233,11 @@ class Job:
 
     def __post_init__(self):
         year_value(self.year)
+        if not isinstance(self.name, str) or not 1 <= len(name_key(self.name)) <= 100:
+            raise LookupError("INVALID_NAME")
+        self.name = name_key(self.name)
+        if self.month is not None and (type(self.month) is not int or not 1 <= self.month <= 12):
+            raise LookupError("INVALID_MONTH")
         if self.competition_ids is not None:
             if not 1 <= len(self.competition_ids) <= 20:
                 raise LookupError("SELECT_1_TO_20_COMPETITIONS")
@@ -244,12 +249,12 @@ class Job:
     def add_competition(self, cid):
         if cid not in self.competitions:
             self.competitions.add(cid)
-            for month in range(1, 13):
+            for month in ([self.month] if self.month is not None else range(1, 13)):
                 self.queue.append(("schedule", (cid, f"{self.year}-{month:02d}")))
 
     def result(self) -> dict:
         complete = not self.queue and not self.error
-        return {"job_id": self.id, "name": self.name, "year": self.year,
+        return {"job_id": self.id, "name": self.name, "year": self.year, "month": self.month,
                 "complete": complete, "error": self.error,
                 "scope": "selected_competitions" if self.competition_ids else "soccer_competitions_in_year_catalog",
                 "coverage_note": "선택/연도별 축구 대회 목록에서 열람 가능한 경기 상세 기준. 배정 알림·예비배정·미공개 경기·풋살 전체를 뜻하지 않습니다.",
@@ -265,7 +270,7 @@ class Job:
         if self.error:
             return self.result()
         try:
-            await client.authenticate(self.name)
+            await client.authenticate()
             for _ in range(budget):
                 if not self.queue:
                     break
@@ -323,7 +328,7 @@ class Job:
                         raise LookupError("UNKNOWN_MATCH_DATE")
                     day = date(*(int(v) for v in m.groups()))
                     roles = roles_for(row, self.name)
-                    if day.year == self.year and roles:
+                    if day.year == self.year and (self.month is None or day.month == self.month) and roles:
                         self.matches.append({"competition_id": cid, "game_id": sid,
                             "date": day.isoformat(), "title": row["TITLE"],
                             "match_number": row["MATCH_NUMBER"], "roles": roles})
@@ -332,7 +337,7 @@ class Job:
             # A session can expire while an otherwise well-shaped empty list is returned.
             # Never finalize a scan without checking the authenticated identity again.
             if not self.queue:
-                await client.authenticate(self.name)
+                await client.authenticate()
         except LookupError as exc:
             self.error = str(exc)
         except (KeyError, ValueError, TypeError):

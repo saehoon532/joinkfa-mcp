@@ -109,27 +109,29 @@ def register_private_tools(mcp):
         try:
             async with lock, KfaClient(s) as client:
                 await client.authenticate(s.name)
-            return {"authenticated": True, "name": s.name, "lookup_scope": "self_only"}
+            return {"authenticated": True, "name": s.name, "lookup_scope": "visible_match_referees_by_name"}
         except LookupError as exc:
             return {"authenticated": False, "error": str(exc)}
 
     @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
     async def start_referee_lookup(name: str, year: int = 2026,
-                                   competition_ids: list[str] | None = None) -> dict:
-        """본인 이름으로 주심·부심·대기심 조회를 시작합니다. continue로 전체를 확인해야 합니다.
+                                   competition_ids: list[str] | None = None,
+                                   month: int | None = None) -> dict:
+        """로그인 계정에서 열람 가능한 경기의 심판을 이름으로 검색합니다. 다른 심판 이름도 가능합니다.
 
         competition_ids 생략 시 해당 연도의 축구 대회 목록을 탐색합니다.
+        month(1~12)를 지정하면 해당 월만 조회합니다. continue로 끝까지 진행해야 합니다.
         완성된 결과도 해당 목록 범위이며 전국의 미공개 배정 전체를 보장하지 않습니다.
         비밀번호, 쿠키, 사용자 ID를 인자로 받지 않습니다.
         """
         s = session()
         try:
             async with lock, KfaClient(s) as client:
-                await client.authenticate(name)
+                await client.authenticate()
                 cleanup()
                 if len(jobs) >= 3:
                     raise LookupError("TOO_MANY_JOBS_CANCEL_OR_WAIT")
-                job = Job(name, year, competition_ids)
+                job = Job(name, year, competition_ids, month=month)
                 jobs[job.id] = job
                 return job.result()
         except LookupError as exc:
@@ -155,7 +157,7 @@ def register_private_tools(mcp):
         async with lock, KfaClient(s) as client:
             job = get_job(job_id)
             try:
-                await client.authenticate(job.name)
+                await client.authenticate()
             except LookupError as exc:
                 raise ToolError(str(exc)) from None
             return {**job.result(), "matches": job.matches[offset:offset + limit],
