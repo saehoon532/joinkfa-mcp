@@ -19,11 +19,10 @@ from pathlib import Path
 from uuid import uuid4
 
 import httpx
-from bs4 import BeautifulSoup
 from defusedxml.ElementTree import fromstring
 
 ORIGIN = "https://www.joinkfa.com"
-MENU = "/service/menu/mainMenu.jsp"
+MENU = "/frame/header/menuList.do"
 CATALOG = "/portal/mat/getMatchList.do"
 SCHEDULE = "/portal/mat/getMatchSingleList.do"
 DETAIL = "/generate/MAP_04_001/SEARCH00.do?CALL_TYPE=NEXACRO"
@@ -168,7 +167,7 @@ class KfaClient:
             if path == DETAIL:
                 headers.update({"Content-Type": "text/xml; charset=UTF-8",
                                 "GP_EMPL_ID": base64.b64encode(self.session.user_id.encode()).decode()})
-            async with self.http.stream("GET" if path == MENU else "POST", ORIGIN + path,
+            async with self.http.stream("POST", ORIGIN + path,
                                         headers=headers, **kwargs) as response:
                 if response.status_code in (401, 403) or 300 <= response.status_code < 400:
                     raise LookupError("AUTH_REQUIRED_OR_ACCESS_DENIED")
@@ -187,14 +186,12 @@ class KfaClient:
     async def authenticate(self, requested_name: str):
         if name_key(requested_name) != name_key(self.session.name):
             raise LookupError("SELF_LOOKUP_ONLY")
-        raw = await self.request(MENU)
-        soup = BeautifulSoup(raw, "html.parser")
-        names = []
-        for tag in soup.find_all(attrs={"title": True}):
-            m = re.fullmatch(r"\[([^\]]+)\]님의 개인정보로 이동합니다\.", tag["title"].strip())
-            if m:
-                names.append(name_key(m.group(1)))
-        if names != [name_key(self.session.name)] or not soup.find(id="logoutBtn"):
+        data = await self.json(MENU, {"SYS_CD": "CETUS"})
+        identity = data.get("session")
+        if (not isinstance(identity, dict)
+                or identity.get("USER_ID") != self.session.user_id
+                or not isinstance(identity.get("USER_NAME"), str)
+                or name_key(identity["USER_NAME"]) != name_key(self.session.name)):
             raise LookupError("AUTH_REQUIRED_OR_IDENTITY_UNVERIFIED")
 
     async def json(self, path: str, params: dict) -> dict:

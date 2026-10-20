@@ -89,12 +89,30 @@ async def test_redirect_never_receives_cookie_and_errors_redacted():
 
 @pytest.mark.asyncio
 async def test_authentication_requires_matching_display_identity():
-    html = '<a title="[엄세훈]님의 개인정보로 이동합니다.">내정보</a><a id="logoutBtn">Logout</a>'
-    async with KfaClient(session(), httpx.MockTransport(lambda r: httpx.Response(200, text=html))) as client:
+    data = {"session": {"USER_ID": session().user_id, "USER_NAME": "엄세훈"}}
+    def identity_response(request):
+        assert request.method == "POST"
+        assert request.url.path == MENU
+        assert json.loads(request.content) == {"SYS_CD": "CETUS"}
+        return httpx.Response(200, json=data)
+    async with KfaClient(session(), httpx.MockTransport(identity_response)) as client:
         await client.authenticate("엄세훈")
         with pytest.raises(LookupError, match="SELF_LOOKUP_ONLY"):
             await client.authenticate("다른사람")
-    async with KfaClient(session(), httpx.MockTransport(lambda r: httpx.Response(200, text="Login"))) as client:
+    async with KfaClient(session(), httpx.MockTransport(lambda r: httpx.Response(200, json={"session": None}))) as client:
+        with pytest.raises(LookupError, match="AUTH_REQUIRED_OR_IDENTITY_UNVERIFIED"):
+            await client.authenticate("엄세훈")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity", [
+    {"USER_ID": "someone-else", "USER_NAME": "엄세훈"},
+    {"USER_ID": "test-user", "USER_NAME": "다른사람"},
+    {"USER_NAME": "엄세훈"},
+])
+async def test_authentication_rejects_wrong_or_missing_server_identity(identity):
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"session": identity}))
+    async with KfaClient(session(), transport) as client:
         with pytest.raises(LookupError, match="AUTH_REQUIRED_OR_IDENTITY_UNVERIFIED"):
             await client.authenticate("엄세훈")
 

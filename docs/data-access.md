@@ -14,6 +14,7 @@
 | 월별 경기 | JSON POST `/portal/mat/getMatchSingleList.do` | [matchSingle.jsp](https://www.joinkfa.com/service/match/matchSingle.jsp) |
 | 경기 상세 | XML POST `/generate/MAP_04_001/SEARCH00.do?CALL_TYPE=NEXACRO` | [MAT_04_001.xfdl.js](https://www.joinkfa.com/MAT/MAT_04_001.xfdl.js) |
 | 전송 규격 | XML, `GP_EMPL_ID` 헤더 | [Transaction.js](https://www.joinkfa.com/nexacro17lib/component/extPrototype/Transaction.js) |
+| 로그인 상태 | JSON POST `/frame/header/menuList.do`, `{"SYS_CD":"CETUS"}` | [mainMenu.jsp](https://www.joinkfa.com/service/menu/mainMenu.jsp)의 `menuData()` |
 | 본인 배정 알림 | XML `/generate/REF_54_001/getSEARCH00.do?CALL_TYPE=NEXACRO` | [REF_54_001.xfdl.js](https://www.joinkfa.com/REF/REF_54_001.xfdl.js) |
 
 `MAT_04_001` 파일의 실제 form name은 `MAP_04_001`입니다. 경로를 오타로 보고 MAT로 바꾸면 안 됩니다.
@@ -35,4 +36,4 @@
 - 실응답의 XML namespace/오류 처리와 인증 만료 응답의 모든 경우.
 - 원본 대회 목록의 비공개 경기 누락 범위, 취소된 경기 처리, 동명이인 식별.
 
-따라서 로그인 엔드포인트를 추측해 만들지 않았습니다. 코드의 인증 상태 확인은 UI에서 관찰한 내정보 title과 Logout 요소를 엄격하게 검사하며, 레이아웃이 다르면 안전하게 실패합니다. 실세션 통합 테스트에서 필요한 규격을 확인한 후 수정해야 합니다.
+로그인 이름은 메뉴 HTML에 정적으로 포함되지 않고 `menuList.do` 응답의 `session`에서 화면에 삽입됩니다. 인증 상태 확인은 이 응답의 `USER_ID`와 `USER_NAME`을 모두 검사합니다. 2026-10-20 사용자 승인 후 로컬 로그인 도우미에서 실제 세션의 본인 확인과 경기 상세 HTTP 조회를 검증했습니다. Render에서의 동작과 전체 연도 집계는 별도 검증 대상입니다.
