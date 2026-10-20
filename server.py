@@ -64,7 +64,25 @@ async def inspect_public_page(source: str) -> dict:
     except httpx.HTTPError:
         return {"error": "PUBLIC_PAGE_UNAVAILABLE"}
 
+async def check_provisioned_session():
+    """Operator-only startup result; never log account or credential contents."""
+    if os.environ.get("KFA_PRIVATE_ENABLED") != "1":
+        return
+    from kfa_lookup import KfaClient, LookupError, Session
+    try:
+        session = Session.load(os.environ.get("KFA_SESSION_FILE", "/etc/secrets/kfa-session.json"))
+        async with KfaClient(session) as client:
+            await client.authenticate(session.name)
+        print("KFA_SESSION_SELF_CHECK: AUTHENTICATED", flush=True)
+    except LookupError as exc:
+        print("KFA_SESSION_SELF_CHECK: " + str(exc), flush=True)
+    except Exception:
+        print("KFA_SESSION_SELF_CHECK: CHECK_FAILED", flush=True)
+
+
 if __name__ == "__main__":
+    import asyncio
+    asyncio.run(check_provisioned_session())
     port = int(os.environ.get("PORT", "8000"))
     mcp.run(
         transport="http",
