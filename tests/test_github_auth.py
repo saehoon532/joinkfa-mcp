@@ -34,3 +34,19 @@ def test_github_config_missing_secret_fails_closed(monkeypatch):
     monkeypatch.delenv("KFA_GITHUB_CLIENT_SECRET", raising=False)
     with pytest.raises(RuntimeError, match="OAuth"):
         private_auth()
+
+
+@pytest.mark.asyncio
+async def test_restore_only_existing_public_client_with_exact_redirect(monkeypatch):
+    from pydantic import AnyUrl
+    provider = object.__new__(OwnerGitHubProvider)
+    monkeypatch.setattr(GitHubProvider, "get_client", AsyncMock(return_value=None))
+    assert await provider.get_client("unknown") is None
+    client = await provider.get_client("2d77d5b6-e1cc-49c9-b96d-ac011e3eb522")
+    assert client.scope == "read:user"
+    assert client.client_secret is None
+    assert str(client.validate_redirect_uri(AnyUrl("https://chatgpt.com/connector/oauth/n9VBX4UUgSfk"))) == "https://chatgpt.com/connector/oauth/n9VBX4UUgSfk"
+    with pytest.raises(Exception):
+        client.validate_redirect_uri(AnyUrl("https://evil.example/callback"))
+    with pytest.raises(Exception):
+        client.validate_redirect_uri(AnyUrl("https://chatgpt.com/connector/oauth/other"))

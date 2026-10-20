@@ -7,6 +7,8 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.auth.providers.github import GitHubProvider
 from fastmcp.server.dependencies import get_access_token
 from fastmcp.exceptions import ToolError
+from fastmcp.server.auth.oauth_proxy import ProxyDCRClient
+from pydantic import AnyUrl
 
 from kfa_lookup import Job, KfaClient, LookupError, Session
 
@@ -29,6 +31,23 @@ class OwnerGitHubProvider(GitHubProvider):
     def __init__(self, *, owner: str, **kwargs):
         self.owner = owner
         super().__init__(required_scopes=["read:user"], **kwargs)
+
+    async def get_client(self, client_id):
+        client = await super().get_client(client_id)
+        if client is not None:
+            return client
+        # Restore only the existing ChatGPT public client after ephemeral Render
+        # storage is replaced. This ID is public, not an authentication credential.
+        # Fresh GitHub owner authorization and PKCE remain required.
+        if client_id != "2d77d5b6-e1cc-49c9-b96d-ac011e3eb522":
+            return None
+        redirect = "https://chatgpt.com/connector/oauth/n9VBX4UUgSfk"
+        return ProxyDCRClient(client_id=client_id, client_secret=None,
+            redirect_uris=[AnyUrl(redirect)],
+            allowed_redirect_uri_patterns=[redirect],
+            grant_types=["authorization_code", "refresh_token"],
+            response_types=["code"], scope="read:user",
+            token_endpoint_auth_method="none", client_name="Join KFA 인증")
 
     async def load_access_token(self, token):
         verified = await super().load_access_token(token)
