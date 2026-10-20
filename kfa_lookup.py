@@ -29,6 +29,22 @@ DETAIL = "/generate/MAP_04_001/SEARCH00.do?CALL_TYPE=NEXACRO"
 ALLOWED = {MENU, CATALOG, SCHEDULE, DETAIL}
 NS = "http://www.nexacroplatform.com/platform/dataset"
 MAX_BYTES = 8 * 1024 * 1024
+TRANSIENT_ERRORS = {"UPSTREAM_CONNECT_TIMEOUT", "UPSTREAM_READ_TIMEOUT", "UPSTREAM_WRITE_TIMEOUT",
+                    "UPSTREAM_POOL_TIMEOUT", "UPSTREAM_CONNECTION_FAILED", "UPSTREAM_CONNECTION_RESET",
+                    "UPSTREAM_PROTOCOL_ERROR", "UPSTREAM_NETWORK_ERROR", "UPSTREAM_TEMPORARILY_UNAVAILABLE"}
+
+
+def network_error_code(exc):
+    for kind, code in ((httpx.ConnectTimeout, "UPSTREAM_CONNECT_TIMEOUT"),
+                       (httpx.ReadTimeout, "UPSTREAM_READ_TIMEOUT"),
+                       (httpx.WriteTimeout, "UPSTREAM_WRITE_TIMEOUT"),
+                       (httpx.PoolTimeout, "UPSTREAM_POOL_TIMEOUT"),
+                       (httpx.ConnectError, "UPSTREAM_CONNECTION_FAILED"),
+                       (httpx.ReadError, "UPSTREAM_CONNECTION_RESET"),
+                       (httpx.RemoteProtocolError, "UPSTREAM_PROTOCOL_ERROR")):
+        if isinstance(exc, kind):
+            return code
+    return "UPSTREAM_NETWORK_ERROR"
 
 
 class LookupError(Exception):
@@ -156,11 +172,21 @@ class KfaClient:
         await self.http.aclose()
 
     async def request(self, path: str, **kwargs) -> bytes:
+        # All allowlisted endpoints are read-only even though they use POST.
+        for attempt in range(3):
+            try:
+                return await self._request_once(path, **kwargs)
+            except LookupError as exc:
+                if str(exc) not in TRANSIENT_ERRORS or attempt == 2:
+                    raise
+                await asyncio.sleep(2 ** (attempt + 1))
+
+    async def _request_once(self, path: str, **kwargs) -> bytes:
         if path not in ALLOWED:
             raise LookupError("ENDPOINT_NOT_ALLOWED")
         if self.session.expires_at <= time.time():
             raise LookupError("SESSION_EXPIRED")
-        await asyncio.sleep(max(0, 0.35 - (time.monotonic() - self._last_request)))
+        await asyncio.sleep(max(0, 1.0 - (time.monotonic() - self._last_request)))
         self._last_request = time.monotonic()
         try:
             headers = {"Referer": ORIGIN + "/", "Origin": ORIGIN}
@@ -171,6 +197,10 @@ class KfaClient:
                                         headers=headers, **kwargs) as response:
                 if response.status_code in (401, 403) or 300 <= response.status_code < 400:
                     raise LookupError("AUTH_REQUIRED_OR_ACCESS_DENIED")
+                if response.status_code == 429:
+                    raise LookupError("UPSTREAM_RATE_LIMITED")
+                if response.status_code in (502, 503, 504):
+                    raise LookupError("UPSTREAM_TEMPORARILY_UNAVAILABLE")
                 if response.status_code != 200:
                     raise LookupError("UPSTREAM_HTTP_ERROR")
                 chunks, size = [], 0
@@ -180,8 +210,9 @@ class KfaClient:
                         raise LookupError("RESPONSE_TOO_LARGE")
                     chunks.append(chunk)
                 return b"".join(chunks)
-        except httpx.HTTPError:
-            raise LookupError("UPSTREAM_CONNECTION_ERROR") from None
+        except httpx.HTTPError as exc:
+            # Only fixed codes leave the adapter; never emit URLs, cookies or bodies.
+            raise LookupError(network_error_code(exc)) from None
 
     async def authenticate(self, requested_name: str | None = None):
         # Verify the provisioned account, independently of the referee being searched.
@@ -256,6 +287,7 @@ class Job:
         complete = not self.queue and not self.error
         return {"job_id": self.id, "name": self.name, "year": self.year, "month": self.month,
                 "complete": complete, "error": self.error,
+                "retryable": self.error in TRANSIENT_ERRORS,
                 "scope": "selected_competitions" if self.competition_ids else "soccer_competitions_in_year_catalog",
                 "coverage_note": "선택/연도별 축구 대회 목록에서 열람 가능한 경기 상세 기준. 배정 알림·예비배정·미공개 경기·풋살 전체를 뜻하지 않습니다.",
                 "count": len(self.matches) if complete else None,
@@ -267,6 +299,8 @@ class Job:
     async def advance(self, client: KfaClient, budget: int = 10):
         if not 1 <= budget <= 20:
             raise LookupError("INVALID_BUDGET")
+        if self.error in TRANSIENT_ERRORS:
+            self.error = None
         if self.error:
             return self.result()
         try:
