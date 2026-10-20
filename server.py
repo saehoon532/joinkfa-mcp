@@ -3,8 +3,12 @@ import os
 import httpx
 from bs4 import BeautifulSoup
 from fastmcp import FastMCP
+from private_tools import private_auth, register_private_tools
 
-mcp = FastMCP("JOIN KFA MCP")
+auth = private_auth()
+mcp = FastMCP("JOIN KFA MCP", auth=auth, mask_error_details=True)
+if auth is not None:
+    register_private_tools(mcp)
 
 # 공개 대회 페이지의 접근성을 확인하기 위한 초기 주소
 SOURCES = {
@@ -57,8 +61,8 @@ async def inspect_public_page(source: str) -> dict:
             "truncated": len(content) > 10000,
         }
 
-    except httpx.HTTPError as error:
-        return {"error": str(error)}
+    except httpx.HTTPError:
+        return {"error": "PUBLIC_PAGE_UNAVAILABLE"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
